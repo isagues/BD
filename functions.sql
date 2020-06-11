@@ -267,3 +267,7 @@ create trigger newEvent
 
 copy eventView(declaration_number, declaration_type, declaration_date, state, disaster_type)
     from 'C:\Users\Public\Documents\fed_emergency_disaster.csv' delimiter ',' csv header;
+                                                             
+-- Comando para no super user:
+-- psql tabla user
+-- \COPY eventView FROM /absolutePath/fed_emergency_disaster.csv csv header delimiter ','
