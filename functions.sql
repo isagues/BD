@@ -41,14 +41,22 @@ create table DATEDETAIL
 create table EVENT
 (
     Declaration_Number varchar,
-    Declaration_Type   varchar check (Declaration_Type in ('Emergency', 'Disaster')),
+    Declaration_Type   varchar, --check (Declaration_Type in ('Emergency', 'Disaster')),
+    Declaration_Date   integer not null,
     State              varchar,
     Disaster_Type      varchar,
-    Declaration_Date   integer not null,
-    primary key (Declaration_Number)
+    primary key (Declaration_Number),
+    foreign key (Declaration_Date) references datedetail
 );
 
--- Seccion ier -------------------------------------------------------------------------------------------------------------------
+create view eventView as
+    select Declaration_Number, Declaration_Type, make_date(q.yearfk, m.monthid, d.day) as Declaration_Date , State, Disaster_Type
+    from event e
+        inner join datedetail d on e.declaration_date = d.id
+        inner join month m on d.monthfk = m.id
+        inner join quarter q on m.quarterfk = q.id;
+
+-- Seccion íer -------------------------------------------------------------------------------------------------------------------
 
 create or replace function is_leap_year(year year.year%type)
  returns boolean as
@@ -162,18 +170,20 @@ fecha date
         begin
             dayNumber = extract(isodow from fecha);
             case dayNumber
-                when 0 then return 'domingo';
                 when 1 then return 'lunes';
                 when 2 then return 'martes';
                 when 3 then return 'miercoles';
                 when 4 then return 'jueves';
                 when 5 then return 'viernes';
                 when 6 then return 'sabado';
+                when 7 then return 'domingo';
                 else raise 'Invalid date';
             end case;
         end
     $$
 language plpgsql;
+
+select getDayName('14/06/2020');
 
 create or replace function insertDateDetail(
     fecha date
@@ -209,3 +219,31 @@ as $$
         exception when others then raise exception 'insertDateDetail: (%)', sqlerrm;
     end
 $$ language plpgsql returns null on null input;
+
+create or replace function newEventHandler() returns trigger
+as $$
+    declare
+        dayID datedetail.id%type;
+    begin
+        select d.id into dayID
+        from datedetail d
+            inner join month m on d.monthfk = m.id
+            inner join quarter q on m.quarterfk = q.id
+        where d.day = extract(day from new.Declaration_Date)
+          and m.monthid =  extract(month from new.Declaration_Date)
+          and q.yearfk =  extract(year from new.Declaration_Date);
+
+        if not FOUND then
+            dayID = insertDateDetail(new.Declaration_Date);
+        end if;
+
+        insert into event(declaration_number, declaration_type, declaration_date, state, disaster_type)
+        values(new.Declaration_Number, new.Declaration_Type, dayID, new.State, new.Disaster_Type);
+        return new;
+    end;
+$$ language plpgsql;
+
+create trigger newEvent instead of insert on eventView for each row execute procedure newEventHandler();
+
+copy eventView(declaration_number, declaration_type, declaration_date, state, disaster_type)
+    from 'C:\Users\Public\Documents\fed_emergency_disaster.csv' delimiter ',' csv header;
