@@ -1,3 +1,4 @@
+--------------------- TABLAS ---------------------------
 create table YEAR
 (
     year   integer not null check (year < 2500),
@@ -40,8 +41,8 @@ create table DATEDETAIL
 
 create table EVENT
 (
-    Declaration_Number varchar,
-    Declaration_Type   varchar, --check (Declaration_Type in ('Emergency', 'Disaster')),
+    Declaration_Number varchar not null,
+    Declaration_Type   varchar,
     Declaration_Date   integer not null,
     State              varchar,
     Disaster_Type      varchar,
@@ -56,60 +57,30 @@ create view eventView as
         inner join month m on d.monthfk = m.id
         inner join quarter q on m.quarterfk = q.id;
 
--- Seccion íer -------------------------------------------------------------------------------------------------------------------
+--------------------- FUNCIONES AUXILIARES ---------------------------
 
-create or replace function is_leap_year(year year.year%type)
- returns boolean as
-$$
-    begin
-        return (year % 4 = 0) and ((year % 100 <> 0) or (year % 400 = 0));
-    end;
-$$ LANGUAGE plpgsql returns null on null input;
+create or replace function is_leap_year(
+    year year.year%type
+) returns boolean
+    as $$
+        begin
+            return (year % 4 = 0) and ((year % 100 <> 0) or (year % 400 = 0));
+        end;
+    $$ language plpgsql
+    returns null on null input;
 
-create or replace function newYearHandler() returns trigger as
-$$
-    begin
-        if new.year is null then
-            raise exception 'year cant be null';
-        end if;
-        new.isleap = is_leap_year(new.year);
-        return new;
-    end
-$$
-    language plpgsql;
+create or replace function getQuarterNumber(
+    month MONTH.monthid%type
+) returns quarter.quarternumber%type
+    as $$
+        begin
+            return (month - 1) / 3 + 1;
+        end;
+    $$ language plpgsql
+    returns null on null input;
 
-create trigger newYear
-    before insert
-    on YEAR
-    for each row
-    execute procedure newYearHandler();
-
--- Seccion cuarter -------------------------------------------------------------------------------------------------------------------
-create or replace function newQuarterHandler() returns trigger
-as $$
-    begin
-        raise notice 'Year (nqh): %', new.yearfk;
-        perform * from year y where y.year = new.yearfk;
-        if not FOUND then
-            insert into year(year) values (new.yearfk);
-        end if;
-        return new;
-    end;
-$$ language plpgsql;
-
-create trigger newQuarter
-    before insert on quarter for each row execute procedure newQuarterHandler();
-
-create or replace function getQuarterNumber(month MONTH.monthid%type) returns quarter.quarternumber%type
- as $$
-begin
-    return (month - 1) / 3 + 1;
-end;
-$$ language plpgsql returns null on null input;
-
--- Secion month
 create or replace function getDescription(
-month month.monthid%type
+    month month.monthid%type
 ) returns month.monthdesc%type
     as $$
         begin
@@ -129,40 +100,10 @@ month month.monthid%type
                 else raise 'Invalid month ID';
             end case;
         end
-    $$
-language plpgsql;
-
-create or replace function insertMonth(
-    month month.monthid%type,
-    year year.year%type
-) returns month.id%type
-as $$
-    declare
-        qNumber quarter.quarternumber%type;
-        monthDes month.monthdesc%type;
-        qFK quarter.id%type;
-        monthID month.id%type;
-    begin
-        raise notice 'Month: %, Year: %', month, year;
-        qNumber = getQuarterNumber(month);
-        monthDes = getDescription(month);
-        select id into qFK from quarter where quarternumber = qNumber and yearfk = year;
-        if not found then
-            raise notice 'qNumber: %, Year: %', qNumber, year;
-            insert into quarter(quarternumber, yearfk) values (qNumber,year) returning id into qFK;
-        end if;
-        insert into month(monthid, monthdesc, quarterfk) values (month, monthDes, qFK) returning id into monthID;
-        return monthID;
-
-        exception when others then raise exception 'insertMonth: (%)', sqlerrm;
-    end
-$$ language plpgsql returns null on null input;
-
--- DAET DETAIL -------------------------------------------------------------------------------------------------------------------------------
-select extract(isodow from date '2016-12-12');
+    $$ language plpgsql;
 
 create or replace function getDayName(
-fecha date
+    fecha date
 ) returns month.monthdesc%type
     as $$
         declare
@@ -183,67 +124,146 @@ fecha date
     $$
 language plpgsql;
 
-select getDayName('14/06/2020');
+--------------------- YEAR ---------------------------
+
+create or replace function newYearHandler(
+) returns trigger
+    as $$
+        begin
+            if new.year is null then
+                raise exception 'year cant be null';
+            end if;
+            new.isleap = is_leap_year(new.year);
+            return new;
+        end
+    $$ language plpgsql;
+
+create trigger newYear
+    before insert
+    on YEAR
+    for each row
+    execute procedure newYearHandler();
+
+--------------------- QUARTER ---------------------------
+
+create or replace function newQuarterHandler(
+) returns trigger
+    as $$
+        begin
+            perform * from year y where y.year = new.yearfk;
+            if not found then
+                insert into year(year) values (new.yearfk);
+            end if;
+            return new;
+        end;
+    $$ language plpgsql;
+
+create trigger newQuarter
+    before insert
+    on quarter
+    for each row
+    execute procedure newQuarterHandler();
+
+--------------------- MONTH  ---------------------------
+
+create or replace function insertMonth(
+    month month.monthid%type,
+    year year.year%type
+) returns month.id%type
+    as $$
+        declare
+            qNumber quarter.quarternumber%type;
+            monthDes month.monthdesc%type;
+            qFK quarter.id%type;
+            monthID month.id%type;
+        begin
+            qNumber = getQuarterNumber(month);
+            monthDes = getDescription(month);
+
+            select id into qFK from quarter where quarternumber = qNumber and yearfk = year;
+
+            if not found then
+                insert into quarter(quarternumber, yearfk) values (qNumber,year) returning id into qFK;
+            end if;
+
+            insert into month(monthid, monthdesc, quarterfk) values (month, monthDes, qFK) returning id into monthID;
+            return monthID;
+
+            exception when others then raise exception 'insertMonth: (%)', sqlerrm;
+        end
+    $$ language plpgsql returns null on null input;
+
+--------------------- DATE DETAIL ---------------------------
 
 create or replace function insertDateDetail(
     fecha date
 ) returns month.id%type
-as $$
-    declare
-        dayVar datedetail.day%type;
-        month month.monthid%type;
-        year year.year%type;
-        dayName datedetail.dayofweek%type;
-        isWeekend datedetail.weekend%type;
-        monthID month.id%type;
-        dateID datedetail.id%type;
-    begin
-        dayVar = extract(day from fecha);
-        month = extract(month from fecha);
-        year = extract(year from fecha);
-        dayName = getDayName(fecha);
-        isWeekend = dayName in ('sabado', 'domingo');
+    as $$
+        declare
+            dayVar datedetail.day%type;
+            month month.monthid%type;
+            year year.year%type;
+            dayName datedetail.dayofweek%type;
+            isWeekend datedetail.weekend%type;
+            monthID month.id%type;
+            dateID datedetail.id%type;
+        begin
+            dayVar = extract(day from fecha);
+            month = extract(month from fecha);
+            year = extract(year from fecha);
+            dayName = getDayName(fecha);
+            isWeekend = dayName in ('sabado', 'domingo');
 
-        select m.id into monthID
-        from month m
-            inner join quarter q on m.quarterfk = q.id
-        where m.monthid = month and q.yearfk = year;
+            select m.id into monthID
+            from month m
+                inner join quarter q on m.quarterfk = q.id
+            where m.monthid = month and q.yearfk = year;
 
-        if not found then
-            select insertMonth(month, year) into monthID;
-        end if;
+            if not found then
+                select insertMonth(month, year) into monthID;
+            end if;
 
-        insert into datedetail(day, dayofweek, monthfk, weekend) values (dayVar, dayName, monthID, isWeekend) returning id into dateID;
-        return dateID;
+            insert into datedetail(day, dayofweek, monthfk, weekend) values (dayVar, dayName, monthID, isWeekend) returning id into dateID;
+            return dateID;
 
-        exception when others then raise exception 'insertDateDetail: (%)', sqlerrm;
-    end
-$$ language plpgsql returns null on null input;
+            exception when others then raise exception 'insertDateDetail: (%)', sqlerrm;
+        end
+    $$ language plpgsql returns null on null input;
 
-create or replace function newEventHandler() returns trigger
-as $$
-    declare
-        dayID datedetail.id%type;
-    begin
-        select d.id into dayID
-        from datedetail d
-            inner join month m on d.monthfk = m.id
-            inner join quarter q on m.quarterfk = q.id
-        where d.day = extract(day from new.Declaration_Date)
-          and m.monthid =  extract(month from new.Declaration_Date)
-          and q.yearfk =  extract(year from new.Declaration_Date);
+--------------------- EVENT ---------------------------
 
-        if not FOUND then
-            dayID = insertDateDetail(new.Declaration_Date);
-        end if;
+create or replace function newEventHandler(
+) returns trigger
+    as $$
+        declare
+            dayID datedetail.id%type;
+        begin
+            select d.id into dayID
+            from datedetail d
+                inner join month m on d.monthfk = m.id
+                inner join quarter q on m.quarterfk = q.id
+            where d.day = extract(day from new.Declaration_Date)
+              and m.monthid =  extract(month from new.Declaration_Date)
+              and q.yearfk =  extract(year from new.Declaration_Date);
 
-        insert into event(declaration_number, declaration_type, declaration_date, state, disaster_type)
-        values(new.Declaration_Number, new.Declaration_Type, dayID, new.State, new.Disaster_Type);
-        return new;
-    end;
-$$ language plpgsql;
+            if not FOUND then
+                dayID = insertDateDetail(new.Declaration_Date);
+            end if;
 
-create trigger newEvent instead of insert on eventView for each row execute procedure newEventHandler();
+            insert into event(declaration_number, declaration_type, declaration_date, state, disaster_type)
+            values(new.Declaration_Number, new.Declaration_Type, dayID, new.State, new.Disaster_Type);
+
+            return new;
+        end;
+    $$ language plpgsql;
+
+create trigger newEvent
+    instead of insert
+    on eventView
+    for each row
+    execute procedure newEventHandler();
+
+--------------------- COPY ---------------------------
 
 copy eventView(declaration_number, declaration_type, declaration_date, state, disaster_type)
     from 'C:\Users\Public\Documents\fed_emergency_disaster.csv' delimiter ',' csv header;
